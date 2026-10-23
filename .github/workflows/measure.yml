@@ -1,0 +1,62 @@
+name: measure
+on:
+  workflow_dispatch:
+    inputs:
+      items:
+        description: '[{"id": "...", "url": "..."}] の JSON'
+        required: true
+      bundle:
+        description: 道具の tar.gz を base64 にした物（実行ごとに渡し、repo には残さない）
+        required: true
+      tag:
+        description: 結果の名前
+        required: true
+        default: measure
+      shards:
+        description: 並べる数
+        required: true
+        default: '4'
+permissions:
+  contents: read
+jobs:
+  measure:
+    runs-on: windows-latest
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - name: 日本語の文字読み取りを入れる
+        shell: pwsh
+        run: |
+          $c = Get-WindowsCapability -Online | Where-Object { $_.Name -like 'Language.OCR*ja-JP*' }
+          if ($c.State -ne 'Installed') { Add-WindowsCapability -Online -Name $c.Name | Out-Null }
+          Get-WindowsCapability -Online | Where-Object { $_.Name -like 'Language.OCR*ja-JP*' } | Select-Object Name, State
+      - name: 道具を入れる
+        shell: pwsh
+        run: |
+          pip install -q yt-dlp opencv-python numpy pillow winocr imageio-ffmpeg
+          pip install -q --extra-index-url https://download.pytorch.org/whl/cpu torch openai-whisper
+          $ff = python -c "import imageio_ffmpeg;print(imageio_ffmpeg.get_ffmpeg_exe())"
+          New-Item -ItemType Directory -Force bin | Out-Null
+          Copy-Item $ff bin/ffmpeg.exe
+          "$PWD\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: 測る
+        shell: pwsh
+        env:
+          ITEMS: ${{ inputs.items }}
+          BUNDLE: ${{ inputs.bundle }}
+          PYTHONIOENCODING: utf-8
+        run: |
+          [IO.File]::WriteAllText("$PWD\items.json", $env:ITEMS)
+          [IO.File]::WriteAllBytes("$PWD\bundle.tgz", [Convert]::FromBase64String($env:BUNDLE))
+          New-Item -ItemType Directory -Force tools | Out-Null
+          tar -xzf bundle.tgz -C tools
+          python tools/runner/measure.py items.json out ${{ matrix.shard }} ${{ inputs.shards }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.tag }}-${{ matrix.shard }}
+          path: out/
+          retention-days: 1
