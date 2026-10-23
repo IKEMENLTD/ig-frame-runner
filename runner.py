@@ -17,8 +17,23 @@ PER = COLS * ROWS
 MAXF = 30
 
 
+# 取りに行ってよいホスト（https だけ）。何でも取れる作りにしない（自動のセキュリティ確認の指摘・2026-10-23）
+ALLOW = tuple(h.strip() for h in os.environ.get(
+    "ALLOW_HOSTS", "cdninstagram.com,fbcdn.net,instagram.com,tiktok.com,tiktokcdn.com,w3schools.com").split(",") if h.strip())
+
+
+def allowed(url):
+    from urllib.parse import urlparse
+    u = urlparse(url)
+    host = (u.hostname or "").lower()
+    return u.scheme == "https" and any(host == h or host.endswith("." + h) for h in ALLOW)
+
+
 def fetch(url, out):
-    if "cdninstagram" in url or url.endswith(".mp4") or "fbcdn" in url:
+    if not allowed(url):
+        raise ValueError(f"許可していないホスト: {url[:80]}")
+    host = url.split("/")[2]
+    if host.endswith(("cdninstagram.com", "fbcdn.net")) or url.split("?")[0].endswith(".mp4"):
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=120) as r, open(out, "wb") as f:
             shutil.copyfileobj(r, f)

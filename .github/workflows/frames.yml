@@ -9,6 +9,8 @@ on:
         description: 結果の名前
         required: true
         default: run
+permissions:
+  contents: read
 jobs:
   frames:
     runs-on: ubuntu-latest
