@@ -38,8 +38,13 @@ def fetch(url, out):
         with urllib.request.urlopen(req, timeout=120) as r, open(out, "wb") as f:
             shutil.copyfileobj(r, f)
     else:
-        subprocess.run(["yt-dlp", "-q", "--no-warnings", "-f", "b[vcodec^=h264]/b", "-o", out, url], check=True,
-                       timeout=300)
+        r = subprocess.run(["yt-dlp", "--no-warnings", "-f", "bv*[vcodec^=avc]/bv*/b", "-o", out.replace(".mp4", ".%(ext)s"),
+                            url], capture_output=True, text=True, timeout=300)
+        got = sorted(glob.glob(out.replace(".mp4", ".*")))
+        print("yt-dlp", r.returncode, r.stderr[-300:], [(g, os.path.getsize(g)) for g in got], flush=True)
+        if not got:
+            raise RuntimeError(r.stderr[-300:])
+        out = got[0]
     return out
 
 
@@ -60,9 +65,11 @@ def sheets(vid, path, out):
     fd = f"tmp/{vid}"
     shutil.rmtree(fd, ignore_errors=True)
     os.makedirs(fd)
-    subprocess.run(["ffmpeg", "-v", "error", "-i", path, "-vf",
-                    f"fps=3,scale={CW}:{CH}:force_original_aspect_ratio=decrease,pad={CW}:{CH}:(ow-iw)/2:(oh-ih)/2",
-                    "-q:v", "3", f"{fd}/%05d.jpg"], check=True)
+    r = subprocess.run(["ffmpeg", "-v", "error", "-i", path, "-vf",
+                        f"fps=3,scale={CW}:{CH}:force_original_aspect_ratio=decrease,pad={CW}:{CH}:(ow-iw)/2:(oh-ih)/2",
+                        "-q:v", "3", f"{fd}/%05d.jpg"], capture_output=True, text=True)
+    if r.returncode:
+        raise RuntimeError("ffmpeg: " + r.stderr[-300:])
     fs = sorted(glob.glob(f"{fd}/*.jpg"))
     keep, prev = [], None
     for i, f in enumerate(fs):
