@@ -6,7 +6,7 @@ on:
         description: '[{"id": "...", "url": "..."}] の JSON'
         required: true
       bundle:
-        description: 道具の tar.gz を base64 にした物（実行ごとに渡し、repo には残さない）
+        description: 道具の tar.gz を BUNDLE_KEY（repo の秘密）で暗号化して base64 にした物。公開 repo の入力は誰でも見られるので、暗号化せずに渡さない
         required: true
       tag:
         description: 結果の名前
@@ -42,17 +42,21 @@ jobs:
           New-Item -ItemType Directory -Force bin | Out-Null
           Copy-Item $ff bin/ffmpeg.exe
           "$PWD\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: 道具を戻す
+        shell: bash
+        env:
+          BUNDLE: ${{ inputs.bundle }}
+          BUNDLE_KEY: ${{ secrets.BUNDLE_KEY }}
+        run: |
+          printf '%s' "$BUNDLE" | base64 -d | openssl enc -d -aes-256-cbc -pbkdf2 -pass env:BUNDLE_KEY -out bundle.tgz
+          mkdir -p tools && tar -xzf bundle.tgz -C tools && rm bundle.tgz
       - name: 測る
         shell: pwsh
         env:
           ITEMS: ${{ inputs.items }}
-          BUNDLE: ${{ inputs.bundle }}
           PYTHONIOENCODING: utf-8
         run: |
           [IO.File]::WriteAllText("$PWD\items.json", $env:ITEMS)
-          [IO.File]::WriteAllBytes("$PWD\bundle.tgz", [Convert]::FromBase64String($env:BUNDLE))
-          New-Item -ItemType Directory -Force tools | Out-Null
-          tar -xzf bundle.tgz -C tools
           python tools/runner/measure.py items.json out ${{ matrix.shard }} ${{ inputs.shards }}
       - uses: actions/upload-artifact@v4
         if: always()
