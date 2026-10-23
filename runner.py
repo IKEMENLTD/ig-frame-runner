@@ -15,7 +15,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 FF = imageio_ffmpeg.get_ffmpeg_exe()  # apt-get が10分止まった（2026-10-23）ので pip の静的な ffmpeg を使う
 
-CW, CH, COLS, ROWS, LAB = 312, 555, 5, 2, 20
+CW, CH, COLS, ROWS, LAB = 312, 554, 5, 2, 20  # 高さは偶数（555 だと JPEG の書き出しが -22 で落ちた）
 PER = COLS * ROWS
 MAXF = 30
 
