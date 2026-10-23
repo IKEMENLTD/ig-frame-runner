@@ -10,7 +10,10 @@ items.json：[{"id": "短い名前", "url": "動画の直リンク（CDN）か�
 import glob, json, os, shutil, subprocess, sys, time, urllib.request
 
 import numpy as np
+import imageio_ffmpeg
 from PIL import Image, ImageDraw, ImageFont
+
+FF = imageio_ffmpeg.get_ffmpeg_exe()  # apt-get が10分止まった（2026-10-23）ので pip の静的な ffmpeg を使う
 
 CW, CH, COLS, ROWS, LAB = 312, 555, 5, 2, 20
 PER = COLS * ROWS
@@ -38,8 +41,7 @@ def fetch(url, out):
         with urllib.request.urlopen(req, timeout=120) as r, open(out, "wb") as f:
             shutil.copyfileobj(r, f)
     else:
-        r = subprocess.run(["yt-dlp", "--no-warnings", "-f", "bv*[vcodec^=avc]/bv*/b", "-o", out.replace(".mp4", ".%(ext)s"),
-                            url], capture_output=True, text=True, timeout=300)
+        r = subprocess.run(["yt-dlp", "--no-warnings", "-f", "bv*[vcodec^=avc]/bv*/b", "--ffmpeg-location", FF, "-o", out.replace(".mp4", ".%(ext)s"), url], capture_output=True, text=True, timeout=300)
         got = sorted(glob.glob(out.replace(".mp4", ".*")))
         print("yt-dlp", r.returncode, r.stderr[-300:], [(g, os.path.getsize(g)) for g in got], flush=True)
         if not got:
@@ -54,18 +56,19 @@ def blocks(p):
 
 
 def probe(p):
-    r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=width,height:format=duration", "-of", "json", p],
-                       capture_output=True, text=True)
-    d = json.loads(r.stdout)
-    s = next((x for x in d.get("streams", []) if x.get("width")), {})
-    return {"w": s.get("width"), "h": s.get("height"), "duration": float(d.get("format", {}).get("duration", 0))}
+    import re
+    e = subprocess.run([FF, "-i", p], capture_output=True, text=True).stderr
+    m = re.search(r"Video:.*?(\d{2,5})x(\d{2,5})", e)
+    d = re.search(r"Duration: (\d+):(\d+):([\d.]+)", e)
+    return {"w": int(m.group(1)) if m else None, "h": int(m.group(2)) if m else None,
+            "duration": int(d.group(1)) * 3600 + int(d.group(2)) * 60 + float(d.group(3)) if d else 0}
 
 
 def sheets(vid, path, out):
     fd = f"tmp/{vid}"
     shutil.rmtree(fd, ignore_errors=True)
     os.makedirs(fd)
-    r = subprocess.run(["ffmpeg", "-v", "error", "-i", path, "-vf",
+    r = subprocess.run([FF, "-v", "error", "-i", path, "-vf",
                         f"fps=3,scale={CW}:{CH}:force_original_aspect_ratio=decrease,pad={CW}:{CH}:(ow-iw)/2:(oh-ih)/2",
                         "-q:v", "3", f"{fd}/%05d.jpg"], capture_output=True, text=True)
     if r.returncode:
