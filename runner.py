@@ -120,6 +120,7 @@ def main(items_p, out):
         except Exception as e:
             info = {"error": str(e)[-300:]}
         meta[vid] = info
+        time.sleep(4)  # 投稿のページから取る時に止められないよう間を空ける
         print(vid, info, flush=True)
     json.dump(meta, open(f"{out}/meta.json", "w", encoding="utf-8"), ensure_ascii=False, indent=1)
 
