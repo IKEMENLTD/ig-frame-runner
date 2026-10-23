@@ -42,7 +42,8 @@ def fetch(url, out):
             shutil.copyfileobj(r, f)
     else:
         r = subprocess.run(["yt-dlp", "--no-warnings", "-f", "bv*[vcodec^=avc]/bv*/b", "--ffmpeg-location", FF, "-o", out.replace(".mp4", ".%(ext)s"), url], capture_output=True, text=True, timeout=300)
-        got = sorted(glob.glob(out.replace(".mp4", ".*")))
+        # 取れた物は動画の入れ物だけを受け取る（自動のセキュリティ確認の指摘・2026-10-23）
+        got = sorted(g for g in glob.glob(out.replace(".mp4", ".*")) if g.rsplit(".", 1)[-1] in ("mp4", "webm", "mkv"))
         print("yt-dlp", r.returncode, r.stderr[-300:], [(g, os.path.getsize(g)) for g in got], flush=True)
         if not got:
             raise RuntimeError(r.stderr[-300:])
@@ -57,7 +58,7 @@ def blocks(p):
 
 def probe(p):
     import re
-    e = subprocess.run([FF, "-i", p], capture_output=True, text=True).stderr
+    e = subprocess.run([FF, "-protocol_whitelist", "file", "-i", p], capture_output=True, text=True).stderr
     m = re.search(r"Video:.*?(\d{2,5})x(\d{2,5})", e)
     d = re.search(r"Duration: (\d+):(\d+):([\d.]+)", e)
     return {"w": int(m.group(1)) if m else None, "h": int(m.group(2)) if m else None,
@@ -68,8 +69,8 @@ def sheets(vid, path, out):
     fd = f"tmp/{vid}"
     shutil.rmtree(fd, ignore_errors=True)
     os.makedirs(fd)
-    r = subprocess.run([FF, "-v", "error", "-i", path, "-vf",
-                        f"fps=3,scale={CW}:{CH}:force_original_aspect_ratio=decrease,pad={CW}:{CH}:(ow-iw)/2:(oh-ih)/2",
+    r = subprocess.run([FF, "-v", "error", "-protocol_whitelist", "file", "-i", path, "-vf",
+                        f"fps=3,scale={CW}:{CH}:force_original_aspect_ratio=decrease,pad={CW}:{CH}:(ow-iw)/2:(oh-ih)/2,format=yuvj420p",
                         "-q:v", "3", f"{fd}/%05d.jpg"], capture_output=True, text=True)
     if r.returncode:
         raise RuntimeError("ffmpeg: " + r.stderr[-300:])
