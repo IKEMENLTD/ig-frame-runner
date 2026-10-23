@@ -41,10 +41,12 @@ def fetch(url, out):
         with urllib.request.urlopen(req, timeout=120) as r, open(out, "wb") as f:
             shutil.copyfileobj(r, f)
     else:
-        r = subprocess.run(["yt-dlp", "--no-warnings", "-f", "bv*[vcodec^=avc]/bv*/b", "--ffmpeg-location", FF, "-o", out.replace(".mp4", ".%(ext)s"), url], capture_output=True, text=True, timeout=300)
+        r = subprocess.run(["yt-dlp", "--no-warnings", "-f", "b[vcodec^=avc1]/bv*[vcodec^=avc1]/b[vcodec*=264]/b", "-S", "vcodec:h264", "--ffmpeg-location", FF, "-o", out.replace(".mp4", ".%(ext)s"), url], capture_output=True, text=True, timeout=300)
         # 取れた物は動画の入れ物だけを受け取る（自動のセキュリティ確認の指摘・2026-10-23）
         got = sorted(g for g in glob.glob(out.replace(".mp4", ".*")) if g.rsplit(".", 1)[-1] in ("mp4", "webm", "mkv"))
         print("yt-dlp", r.returncode, r.stderr[-300:], [(g, os.path.getsize(g)) for g in got], flush=True)
+        lst = subprocess.run(["yt-dlp", "--no-warnings", "-F", url], capture_output=True, text=True, timeout=120).stdout
+        print("formats", lst[-1500:], flush=True)
         if not got:
             raise RuntimeError(r.stderr[-300:])
         out = got[0]
@@ -61,6 +63,7 @@ def probe(p):
     e = subprocess.run([FF, "-protocol_whitelist", "file", "-i", p], capture_output=True, text=True).stderr
     m = re.search(r"Video:.*?(\d{2,5})x(\d{2,5})", e)
     d = re.search(r"Duration: (\d+):(\d+):([\d.]+)", e)
+    print("probe", [l.strip() for l in e.splitlines() if "Stream" in l][:3], flush=True)
     return {"w": int(m.group(1)) if m else None, "h": int(m.group(2)) if m else None,
             "duration": int(d.group(1)) * 3600 + int(d.group(2)) * 60 + float(d.group(3)) if d else 0}
 
