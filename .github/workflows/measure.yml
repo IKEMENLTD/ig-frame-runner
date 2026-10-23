@@ -16,8 +16,13 @@ on:
         description: 並べる数
         required: true
         default: '4'
+      prev_run:
+        description: 前の走りの番号（読み取り・文字起こしが済んだ回は出方だけ測る）。無ければ空
+        required: false
+        default: ''
 permissions:
   contents: read
+  actions: read
 jobs:
   measure:
     runs-on: windows-latest
@@ -50,6 +55,15 @@ jobs:
         run: |
           printf '%s' "$BUNDLE" | base64 -d | openssl enc -d -aes-256-cbc -pbkdf2 -pass env:BUNDLE_KEY -out bundle.tgz
           mkdir -p tools && tar -xzf bundle.tgz -C tools && rm bundle.tgz
+      - name: 前の走りの結果を読み込む
+        if: ${{ inputs.prev_run != '' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download ${{ inputs.prev_run }} -R ${{ github.repository }} -D prevraw
+          mkdir -p prev && find prevraw -name '*.json' -exec cp {} prev/ \;
+          ls prev | wc -l
       - name: 測る
         shell: pwsh
         env:
