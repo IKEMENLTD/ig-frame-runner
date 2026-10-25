@@ -47,6 +47,9 @@ jobs:
           New-Item -ItemType Directory -Force bin | Out-Null
           Copy-Item $ff bin/ffmpeg.exe
           "$PWD\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          # 出方の測り（telop_motion）は ffprobe を使う。imageio-ffmpeg には ffprobe が無い（2回とも出方が全滅した）
+          choco install ffmpeg -y --no-progress | Out-Null
+          ffprobe -version | Select-Object -First 1
       - name: 道具を戻す
         shell: bash
         env:
