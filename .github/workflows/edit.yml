@@ -7,8 +7,9 @@ on:
         description: 仕事の番号（でたらめな英数字・中身の手がかりにならない物）
         required: true
       job:
-        description: 仕事の指示（JSON）を BUNDLE_KEY で暗号化して base64 にした物。公開 repo の入力は誰でも見られるので暗号化せずに渡さない
-        required: true
+        description: （古い渡し方・空でよい）指示は受付がドライブの _指示 に置き、作業箱が番号で取りに行く
+        required: false
+        default: ""
 permissions:
   contents: read
 concurrency:
@@ -59,11 +60,19 @@ jobs:
             ave/assets/sfx/lab
             ave/assets/bgm
           key: sounds-${{ hashFiles('ave/assets/sounds.json') }}
-      - name: 仕事の指示を戻す
+      # 指示はドライブから番号で受け取る（公開の実行の画面に、暗号化した指示も残さない・2026-10-28）。読んだら消す
+      - name: 仕事の指示を受け取る
         env:
           JOB: ${{ inputs.job }}
+          JOB_ID: ${{ inputs.job_id }}
           BUNDLE_KEY: ${{ secrets.BUNDLE_KEY }}
-        run: printf '%s' "$JOB" | base64 -d | openssl enc -d -aes-256-cbc -pbkdf2 -pass env:BUNDLE_KEY -out job.json
+          DRIVE_OAUTH_JSON: ${{ secrets.DRIVE_OAUTH_JSON }}
+        run: |
+          if [ -n "$JOB" ]; then
+            printf '%s' "$JOB" | base64 -d | openssl enc -d -aes-256-cbc -pbkdf2 -pass env:BUNDLE_KEY -out job.json
+          else
+            python ave/tools/pipeline/fetch_spec.py "$JOB_ID" job.json
+          fi
       - name: 編集する（ログには段の名前だけ）
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
