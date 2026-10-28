@@ -33,7 +33,9 @@ jobs:
       - name: 道具を入れる
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg > /dev/null
-          pip install -q --extra-index-url https://download.pytorch.org/whl/cpu -r ave/tools/pipeline/requirements.txt
+          # torch は PyTorch の置き場「だけ」から先に入れ、残りは PyPI から（--extra-index-url で混ぜると、同じ名前の部品を取り違え得る）
+          pip install -q --index-url https://download.pytorch.org/whl/cpu "$(grep -E '^torch==' ave/tools/pipeline/requirements.txt)"
+          pip install -q -r ave/tools/pipeline/requirements.txt
       # 使い回しは「読む」と「保存する」を分ける。actions/cache は仕事が成功した時しか保存しないので、
       # 1回失敗すると次も外から落とし直し、配るサイトにつながらずに落ちた（2026-10-27）
       - name: 文字起こしの模型（使い回す）
