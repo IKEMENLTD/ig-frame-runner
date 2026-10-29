@@ -4,91 +4,136 @@ on:
   workflow_dispatch:
     inputs:
       job_id:
-        description: 仕事の番号（でたらめな英数字・中身の手がかりにならない物）
+        description: 仕事の番号（でたらめな英数字・中身の手がかりにならない物）。指示は受付がドライブの _指示 に置き、作業箱が番号で取りに行く
         required: true
-      job:
-        description: （古い渡し方・空でよい）指示は受付がドライブの _指示 に置き、作業箱が番号で取りに行く
-        required: false
-        default: ""
 permissions:
   contents: read
 concurrency:
   group: edit-${{ inputs.job_id }}
+# 2026-10-29 辛口点検：段を分け、会員の動画を解く段（make）は鍵の無い別のユーザー worker で、AI の鍵だけを持って回す。
+# - 道具は /opt/ave（root の持ち物）に置く＝worker が書き換えて、後の鍵つきの段に仕込めない。
+# - 指示の本物は作業箱のユーザーだけが読める控え（$RUNNER_TEMP/priv）に置く。worker が書ける /srv/job/work の物は信じない。
+# - 使い回し（キャッシュ）は、模型は Whisper が中身の hash を確かめる。音は worker の段でしか使わない。
+# - Actions は版の番号（SHA）で固定する（タグは付け替えられる）。
 jobs:
   edit:
     runs-on: ubuntu-latest
     timeout-minutes: 300
+    env:
+      JOB_ID: ${{ inputs.job_id }}
+      WORK: /srv/job/work
+      PYTHONIOENCODING: utf-8
     steps:
-      # 道具は非公開の repo から読み取り専用の鍵で取る（公開 repo には置かない）
-      - uses: actions/checkout@v4
+      - name: 番号を確かめる・作業のユーザーを作る
+        run: |
+          [[ "$JOB_ID" =~ ^[0-9a-f]{8,32}$ ]] || { echo "仕事の番号の形が違う"; exit 1; }
+          sudo useradd -m -s /usr/sbin/nologin worker
+          sudo install -d -o "$USER" -m 755 /srv/job "$WORK" /srv/cache
+      # 道具は非公開の repo から読み取り専用の鍵で取る（公開 repo には置かない）。鍵は取った後に残さない
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4（2026-10-29 時点の版に固定）
         with:
           repository: IKEMENLTD/auto-video-edit
           ssh-key: ${{ secrets.AVE_DEPLOY_KEY }}
+          persist-credentials: false
           path: ave
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5（2026-10-29 時点の版に固定）
         with:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: ave/tools/pipeline/requirements.txt
       - name: 道具を入れる
+        id: tools
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg > /dev/null
           # torch は PyTorch の置き場「だけ」から先に入れ、残りは PyPI から（--extra-index-url で混ぜると、同じ名前の部品を取り違え得る）
           pip install -q --index-url https://download.pytorch.org/whl/cpu "$(grep -E '^torch==' ave/tools/pipeline/requirements.txt)"
           pip install -q -r ave/tools/pipeline/requirements.txt
+          sudo cp -r ave /opt/ave && sudo chown -R root:root /opt/ave && sudo chmod -R a+rX,go-w /opt/ave && rm -rf ave
+          echo "python=$(command -v python)" >> "$GITHUB_OUTPUT"
+          echo "sounds=sounds2-$(sha256sum /opt/ave/assets/sounds.json | cut -c1-64)" >> "$GITHUB_OUTPUT"
       # 使い回しは「読む」と「保存する」を分ける。actions/cache は仕事が成功した時しか保存しないので、
       # 1回失敗すると次も外から落とし直し、配るサイトにつながらずに落ちた（2026-10-27）
       - name: 文字起こしの模型（使い回す）
         id: whisper
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4（2026-10-29 時点の版に固定）
         with:
-          path: ~/.cache/whisper
-          key: whisper-turbo-small-v1
+          path: /srv/cache/whisper
+          key: whisper2-turbo-small
       - name: 効果音と BGM（使い回す・repo には入れない）
         id: sounds
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4（2026-10-29 時点の版に固定）
         with:
-          path: |
-            ave/assets/sfx/lab
-            ave/assets/bgm
-          key: sounds-${{ hashFiles('ave/assets/sounds.json') }}
-      - name: 効果音と BGM を揃える（落とせない音があっても止めない）
-        run: python ave/tools/render/fetch_sounds.py > /dev/null
+          path: ~/stage/sounds
+          key: ${{ steps.tools.outputs.sounds }}
+      - name: 効果音と BGM を揃える（worker で・落とせない音があっても止めない）
+        env:
+          PY: ${{ steps.tools.outputs.python }}
+        run: |
+          mkdir -p ~/stage/sounds/lab ~/stage/sounds/bgm
+          find ~/stage/sounds ! -type f ! -type d -delete
+          sudo install -d -o worker -m 755 /opt/ave/assets/sfx /opt/ave/assets/sfx/lab /opt/ave/assets/bgm
+          sudo cp -r ~/stage/sounds/lab/. /opt/ave/assets/sfx/lab/ && sudo cp -r ~/stage/sounds/bgm/. /opt/ave/assets/bgm/
+          sudo chown -R worker /opt/ave/assets/sfx/lab /opt/ave/assets/bgm /srv/cache
+          sudo -u worker env HOME=/home/worker XDG_CACHE_HOME=/srv/cache PYTHONDONTWRITEBYTECODE=1 \
+            "$PY" /opt/ave/tools/render/fetch_sounds.py > /dev/null 2>&1 || true
+          rm -rf ~/stage/sounds && mkdir -p ~/stage/sounds
+          cp -r /opt/ave/assets/sfx/lab ~/stage/sounds/lab && cp -r /opt/ave/assets/bgm ~/stage/sounds/bgm
+          find ~/stage/sounds ! -type f ! -type d -delete
       - name: 効果音と BGM を保存する
         if: steps.sounds.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830  # v4（2026-10-29 時点の版に固定）
         with:
-          path: |
-            ave/assets/sfx/lab
-            ave/assets/bgm
-          key: sounds-${{ hashFiles('ave/assets/sounds.json') }}
-      # 指示はドライブから番号で受け取る（公開の実行の画面に、暗号化した指示も残さない・2026-10-28）。読んだら消す
-      - name: 仕事の指示を受け取る
+          path: ~/stage/sounds
+          key: ${{ steps.tools.outputs.sounds }}
+      # 指示はドライブから番号で受け取る（公開の実行の画面に、暗号化した指示も残さない・2026-10-28）。読んだら消す。
+      # 素材を落とすだけ（ここでは動画を解かない）
+      - name: 指示と素材を受け取る
+        id: fetch
         env:
-          JOB: ${{ inputs.job }}
-          JOB_ID: ${{ inputs.job_id }}
-          BUNDLE_KEY: ${{ secrets.BUNDLE_KEY }}
           DRIVE_OAUTH_JSON: ${{ secrets.DRIVE_OAUTH_JSON }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          SPEC_KEY: ${{ secrets.SPEC_KEY }}
+          ROOTS: ${{ vars.DRIVE_SOURCE_ROOTS }}
         run: |
-          if [ -n "$JOB" ]; then
-            printf '%s' "$JOB" | base64 -d | openssl enc -d -aes-256-cbc -pbkdf2 -pass env:BUNDLE_KEY -out job.json
-          else
-            python ave/tools/pipeline/fetch_spec.py "$JOB_ID" job.json
-          fi
+          if [ -n "$ROOTS" ]; then export DRIVE_SOURCE_ROOTS="$ROOTS"; fi
+          python /opt/ave/tools/pipeline/job.py fetch "$JOB_ID" "$RUNNER_TEMP/priv" "$WORK"
+          sudo chown -R worker:worker "$WORK"
+      # 会員の動画を解く段：worker で、AI の鍵だけ（sudo は環境変数を消し、名指しした物だけ渡す）。
+      # 進み具合は、作業箱のユーザーの relay が決まった段の名前だけをドライブの記録へ写す
       - name: 編集する（ログには段の名前だけ）
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-          DRIVE_OAUTH_JSON: ${{ secrets.DRIVE_OAUTH_JSON }}
           LLM_MODEL: ${{ vars.LLM_MODEL || 'claude-sonnet-5-5' }}
-          PYTHONIOENCODING: utf-8
-        run: python ave/tools/pipeline/job.py job.json work
+          DRIVE_OAUTH_JSON: ${{ secrets.DRIVE_OAUTH_JSON }}
+          PY: ${{ steps.tools.outputs.python }}
+        run: |
+          python /opt/ave/tools/pipeline/job.py relay "$RUNNER_TEMP/priv" "$WORK" &
+          RELAY=$!
+          sudo -u worker --preserve-env=ANTHROPIC_API_KEY,LLM_MODEL,PYTHONIOENCODING \
+            env HOME=/home/worker XDG_CACHE_HOME=/srv/cache NUMBA_CACHE_DIR=/srv/cache/numba PYTHONDONTWRITEBYTECODE=1 \
+            "$PY" /opt/ave/tools/pipeline/job.py make "$WORK" || true
+          kill "$RELAY" || true
+          sudo pkill -9 -u worker || true
+      - name: 仕上がりを置いて共有する
+        if: always() && steps.fetch.outcome == 'success'
+        env:
+          DRIVE_OAUTH_JSON: ${{ secrets.DRIVE_OAUTH_JSON }}
+        run: |
+          sudo pkill -9 -u worker || true
+          sudo chown -R "$USER" "$WORK"
+          python /opt/ave/tools/pipeline/job.py publish "$RUNNER_TEMP/priv" "$WORK"
+      - name: 文字起こしの模型を整える
+        if: always() && steps.whisper.outputs.cache-hit != 'true'
+        run: |
+          sudo pkill -9 -u worker || true
+          sudo find /srv/cache/whisper ! -type f ! -type d -delete 2>/dev/null || true
+          sudo chown -R "$USER" /srv/cache/whisper 2>/dev/null || true
       - name: 文字起こしの模型を保存する
         if: always() && steps.whisper.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830  # v4（2026-10-29 時点の版に固定）
         with:
-          path: ~/.cache/whisper
-          key: whisper-turbo-small-v1
+          path: /srv/cache/whisper
+          key: whisper2-turbo-small
       - name: 後片付け
         if: always()
-        run: rm -rf work job.json
+        run: sudo rm -rf /srv/job "$RUNNER_TEMP/priv"
