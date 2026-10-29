@@ -28,6 +28,7 @@ jobs:
         run: |
           [[ "$JOB_ID" =~ ^[0-9a-f]{8,32}$ ]] || { echo "仕事の番号の形が違う"; exit 1; }
           sudo useradd -m -s /usr/sbin/nologin worker
+          echo "W=$(id -u worker)" >> "$GITHUB_ENV"  # 後の段は、この番号で worker の処理を止める（ユーザーを消した後も）
           sudo install -d -o "$USER" -m 755 /srv/job "$WORK" /srv/cache
       # 道具は非公開の repo から読み取り専用の鍵で取る（公開 repo には置かない）。鍵は取った後に残さない
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4（2026-10-29 時点の版に固定）
@@ -121,19 +122,21 @@ jobs:
             "$PY" /opt/ave/tools/pipeline/job.py make "$WORK" || true
           kill "$RELAY" || true
           # worker を消す（残った処理・予約した処理を後の鍵つきの段へ持ち越させない）
-          W=$(id -u worker)
           sudo crontab -r -u worker 2>/dev/null || true
           sudo pkill -9 -U "$W" || true
           sudo userdel worker || true
           sudo pkill -9 -U "$W" || true
           ! pgrep -U "$W" > /dev/null || { echo "worker の処理が残っている"; exit 1; }
-          echo "W=$W" >> "$GITHUB_ENV"
       - name: 仕上がりを置いて共有する
         if: always() && steps.fetch.outcome == 'success'
         env:
           DRIVE_OAUTH_JSON: ${{ secrets.DRIVE_OAUTH_JSON }}
         run: |
-          [ -n "$W" ] && sudo pkill -9 -U "$W" || true
+          # worker の処理が1つでも残っていれば、作業フォルダの物は使わない（記録だけ失敗にして止める）
+          [[ "$W" =~ ^[0-9]+$ ]] || { python /opt/ave/tools/pipeline/job.py fail "$RUNNER_TEMP/priv"; exit 1; }
+          sudo pkill -9 -U "$W" || true
+          sudo userdel worker 2>/dev/null || true
+          if pgrep -U "$W" > /dev/null; then python /opt/ave/tools/pipeline/job.py fail "$RUNNER_TEMP/priv"; exit 1; fi
           # リンク・名前つきパイプなどは先に消す（job.py の publish も、普通のファイル以外は読まない・上げない）
           sudo find "$WORK" ! -type f ! -type d -delete
           sudo chown -R "$USER" "$WORK"
