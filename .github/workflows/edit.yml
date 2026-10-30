@@ -59,7 +59,7 @@ jobs:
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4（2026-10-29 時点の版に固定）
         with:
           path: /srv/cache/whisper
-          key: whisper2-turbo-small
+          key: whisper3-turbo-small
       - name: 効果音と BGM（使い回す・repo には入れない）
         id: sounds
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4（2026-10-29 時点の版に固定）
@@ -76,7 +76,9 @@ jobs:
           sudo cp -r ~/stage/sounds/lab/. /opt/ave/assets/sfx/lab/ && sudo cp -r ~/stage/sounds/bgm/. /opt/ave/assets/bgm/
           # 模型は作業箱のユーザーが先に落として（Whisper が中身の hash を確かめる）、worker には読むだけにする
           # （worker が書けると、次の仕事に使い回す模型に仕込める）
-          XDG_CACHE_HOME=/srv/cache "$PY" -c "import whisper; whisper.load_model('turbo', device='cpu')" > /dev/null 2>&1
+          # turbo（文字起こし）と small（聞き違いの疑いを調べる word_doubts）の両方。使い回しは枝ごとに分かれ、無い枝では
+          # turbo だけを落として small が無く、worker が書けない置き場に落とそうとして止まった（2026-10-30 main の初回）
+          XDG_CACHE_HOME=/srv/cache "$PY" -c "import whisper; [whisper.load_model(m, device='cpu') for m in ('turbo', 'small')]" > /dev/null 2>&1
           sudo chown -R root:root /srv/cache/whisper && sudo chmod -R a+rX,go-w /srv/cache/whisper
           sudo install -d -o worker -m 755 /srv/cache/numba /srv/cache/fontconfig /srv/cache/torch
           sudo chown -R worker /opt/ave/assets/sfx/lab /opt/ave/assets/bgm
@@ -146,7 +148,7 @@ jobs:
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830  # v4（2026-10-29 時点の版に固定）
         with:
           path: /srv/cache/whisper
-          key: whisper2-turbo-small
+          key: whisper3-turbo-small
       - name: 後片付け
         if: always()
         run: sudo rm -rf /srv/job "$RUNNER_TEMP/priv"
