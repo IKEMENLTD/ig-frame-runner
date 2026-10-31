@@ -113,13 +113,15 @@ jobs:
       - name: 編集する（ログには段の名前だけ）
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # フリー動画（Pexels）の鍵。合う絵がドライブに無い所だけ使う（無ければ使わない・2026-10-31）
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
           LLM_MODEL: ${{ vars.LLM_MODEL || 'claude-sonnet-5-5' }}
           DRIVE_OAUTH_JSON: ${{ secrets.DRIVE_OAUTH_JSON }}
           PY: ${{ steps.tools.outputs.python }}
         run: |
           python /opt/ave/tools/pipeline/job.py relay "$RUNNER_TEMP/priv" "$WORK" &
           RELAY=$!
-          sudo -u worker --preserve-env=ANTHROPIC_API_KEY,LLM_MODEL,PYTHONIOENCODING \
+          sudo -u worker --preserve-env=ANTHROPIC_API_KEY,PEXELS_API_KEY,LLM_MODEL,PYTHONIOENCODING \
             env HOME=/home/worker XDG_CACHE_HOME=/srv/cache NUMBA_CACHE_DIR=/srv/cache/numba PYTHONDONTWRITEBYTECODE=1 \
             "$PY" /opt/ave/tools/pipeline/job.py make "$WORK" || true
           kill "$RELAY" || true
