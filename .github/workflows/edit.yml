@@ -179,10 +179,14 @@ jobs:
                   with urllib.request.urlopen(urllib.request.Request(url, data=data, method=method, headers=h), timeout=60) as r:
                       return r.read()
               def find(name, folder):  # その名前のファイルのうち、決まった名前のフォルダの中の物（_公開停止 の同じ名前と分ける）
-                  q = urllib.parse.urlencode({"q": f"name = '{name}' and trashed = false", "fields": "files(id,parents)",
-                                              "pageSize": 20})
-                  return [f["id"] for f in json.loads(call(API + "?" + q))["files"]
-                          if any(json.loads(call(f"{API}/{p}?fields=name"))["name"] == folder for p in f.get("parents", []))]
+                  # 持ち主がこの鍵のアカウント（'me' in owners・親のフォルダも ownedByMe）の物だけ（2026-11-06 自動の
+                  # セキュリティ点検：名前だけで探すと、他の人が同じ名前のフォルダとファイルを作って共有すれば、それを書き換えられた）
+                  q = urllib.parse.urlencode({"q": f"name = '{name}' and trashed = false and 'me' in owners",
+                                              "fields": "files(id,parents)", "pageSize": 20})
+                  def mine(p):
+                      d = json.loads(call(f"{API}/{p}?fields=name,ownedByMe"))
+                      return d.get("name") == folder and d.get("ownedByMe") is True
+                  return [f["id"] for f in json.loads(call(API + "?" + q))["files"] if any(mine(p) for p in f.get("parents", []))]
               rec = find(f"job_{jid}.json", "_自動編集の記録")
               if len(rec) != 1:
                   return "記録が見つからない"
