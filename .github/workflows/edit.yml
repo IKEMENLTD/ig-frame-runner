@@ -15,6 +15,9 @@ concurrency:
 # - 指示の本物は作業箱のユーザーだけが読める控え（$RUNNER_TEMP/priv）に置く。worker が書ける /srv/job/work の物は信じない。
 # - 使い回し（キャッシュ）は、模型は Whisper が中身の hash を確かめる。音は worker の段でしか使わない。
 # - Actions は版の番号（SHA）で固定する（タグは付け替えられる）。
+# - 取り消し（2026-11-06）：作業箱のユーザーの relay が受付の取り消しの印を見たら、作業フォルダの隣（/srv/job/work.cancel・
+#   /srv/job は作業箱のユーザーの物＝worker は読むだけ）に印を置き、worker の make が見て止まる。publish は印を信じず、
+#   ドライブの記録と取り消しの印をもう一度見る。
 jobs:
   edit:
     runs-on: ubuntu-latest
@@ -146,6 +149,66 @@ jobs:
           sudo find "$WORK" ! -type f ! -type d -delete
           sudo chown -R "$USER" "$WORK"
           python /opt/ave/tools/pipeline/job.py publish "$RUNNER_TEMP/priv" "$WORK"
+      # どの段で落ちても（道具を入れる・取る段・時間切れ・止めた時も）、記録を「受付」「実行中」のまま残さない（2026-11-06：
+      # 初めの方の段で落ちると、失敗を書く段は受け取りが成功した時だけ動くので、記録が「受付」のまま残った）。
+      # 道具の repo を取れなかった・部品を入れられなかった時も書けるように、ここの短い Python（標準の部品だけ・root の
+      # 持ち物の /usr/bin/python3）で、記録を番号の名前で探して書く。作業フォルダの物は読まない。worker の処理は先に止める。
+      # 書き換えるのは「受付」「実行中」の記録だけ（完成・失敗はそのまま）。受付の取り消しの印があれば「取り消し」。
+      # 取り消された仕事は止まった時刻（stopped）も書く（受付は stopped を見るまで同時の本数に数える）。
+      - name: 途中で止まった時は記録を失敗にする
+        if: failure() || cancelled()
+        env:
+          DRIVE_OAUTH_JSON: ${{ secrets.DRIVE_OAUTH_JSON }}
+        run: |
+          if [[ "${W:-}" =~ ^[0-9]+$ ]]; then sudo pkill -9 -U "$W" || true; fi
+          /usr/bin/python3 - <<'PY'
+          import datetime, json, os, re, urllib.parse, urllib.request
+          API = "https://www.googleapis.com/drive/v3/files"
+          def main():
+              jid = os.environ.get("JOB_ID", "")
+              if not re.fullmatch(r"[0-9a-f]{8,32}", jid):
+                  return "仕事の番号の形が違う"
+              t = json.loads(os.environ["DRIVE_OAUTH_JSON"])
+              t = t.get("tokens", {}).get("default", t)
+              form = urllib.parse.urlencode({"grant_type": "refresh_token", "refresh_token": t["refresh_token"],
+                                             "client_id": t["client_id"], "client_secret": t["client_secret"]}).encode()
+              with urllib.request.urlopen("https://oauth2.googleapis.com/token", form, timeout=60) as r:
+                  tok = json.loads(r.read())["access_token"]
+              def call(url, data=None, method="GET", kind=None):
+                  h = {"Authorization": "Bearer " + tok, **({"Content-Type": kind} if kind else {})}
+                  with urllib.request.urlopen(urllib.request.Request(url, data=data, method=method, headers=h), timeout=60) as r:
+                      return r.read()
+              def find(name, folder):  # その名前のファイルのうち、決まった名前のフォルダの中の物（_公開停止 の同じ名前と分ける）
+                  q = urllib.parse.urlencode({"q": f"name = '{name}' and trashed = false", "fields": "files(id,parents)",
+                                              "pageSize": 20})
+                  return [f["id"] for f in json.loads(call(API + "?" + q))["files"]
+                          if any(json.loads(call(f"{API}/{p}?fields=name"))["name"] == folder for p in f.get("parents", []))]
+              rec = find(f"job_{jid}.json", "_自動編集の記録")
+              if len(rec) != 1:
+                  return "記録が見つからない"
+              job = json.loads(call(f"{API}/{rec[0]}?alt=media"))
+              now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9))).strftime("%Y-%m-%d %H:%M")
+              if job.get("id") != jid:
+                  return "記録はそのまま"
+              # 取り消された仕事は「作業箱が止めた」（stopped）まで受付が同時の本数に数える＝ここで止まったと書く
+              if job.get("state") == "取り消し" and not job.get("stopped"):
+                  job.update(stage="取り消し", stopped=now)
+              elif job.get("state") not in ("受付", "実行中"):
+                  return "記録はそのまま"
+              elif find(f"{jid}.json", "_取り消し"):
+                  job.update(state="取り消し", stage="取り消し", stopped=now)
+              else:
+                  job.update(state="失敗", error=("編集の準備で止まりました。" if job["state"] == "受付" else "編集の途中で止まりました。")
+                             + "時間をおいてもう一度頼んでください。")
+              job["updated"] = now
+              call(f"https://www.googleapis.com/upload/drive/v3/files/{rec[0]}?uploadType=media",
+                   json.dumps(job, ensure_ascii=False, indent=1).encode(), "PATCH", "application/json")
+              return "記録を書いた（" + job["state"] + "）"
+          try:
+              print(main())
+          except Exception as e:  # 中身・URL は公開のログに出さない（種類だけ）
+              print(f"記録を書けない（{type(e).__name__}）")
+          PY
       - name: 文字起こしの模型を保存する
         if: always() && steps.whisper.outputs.cache-hit != 'true'
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830  # v4（2026-10-29 時点の版に固定）
