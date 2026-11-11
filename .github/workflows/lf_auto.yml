@@ -57,10 +57,14 @@ jobs:
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ALLOW_API: ${{ vars.LF_AUTO_ALLOW_API }}
           DISABLE_AUTOUPDATER: "1"
           DISABLE_TELEMETRY: "1"
         run: |
-          if [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; then unset ANTHROPIC_API_KEY; echo "考える代金：サブスクの札"; else unset CLAUDE_CODE_OAUTH_TOKEN; echo "考える代金：API の鍵（サブスクの札が無い）"; fi
+          # 考える代金はサブスクの札を優先。API の鍵で動かすのは、管理者が repo の変数 LF_AUTO_ALLOW_API=1 で許した時だけ
+          if [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; then unset ANTHROPIC_API_KEY; echo "考える代金：サブスクの札"
+          elif [ "$ALLOW_API" = "1" ] && [ -n "$ANTHROPIC_API_KEY" ]; then unset CLAUDE_CODE_OAUTH_TOKEN; echo "考える代金：API の鍵（許しあり）"
+          else echo "サブスクの札が未設定（API で動かす許しも無い）＝動かさない"; touch "$RUNNER_TEMP/auto/no_token"; rm -f "$RUNNER_TEMP/auto/mcp.json"; exit 0; fi
           install -d -m 700 "$RUNNER_TEMP/empty" && cd "$RUNNER_TEMP/empty"
           set +e
           claude -p "$(cat "$RUNNER_TEMP/auto/prompt.md")" \
